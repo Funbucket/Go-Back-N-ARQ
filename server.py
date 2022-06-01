@@ -2,6 +2,7 @@ import os
 import socket
 import struct
 import sys
+import time
 
 FLAGS = _ = None
 DEBUG = False
@@ -18,13 +19,13 @@ def get_filedict(rootpath):
     return files
 
 
-def count_segments(prev_sn, sf):
+def count_segments(sf, fs):
     count = 0
     counting = True
     while counting:
-        prev_sn = (prev_sn + 1) % 2 ** FLAGS.msb
+        fs = (fs + 1) % 2 ** FLAGS.msb
         count = count + 1
-        if prev_sn == sf:
+        if fs == sf:
             counting = False
     return count
 
@@ -43,6 +44,17 @@ def get_fileinfo(path):
             seq = (seq + 1) % (2 ** FLAGS.msb)
             size = size + chunk_size
     return {'size': size, 'segments': segments}
+
+
+def find_cumulative_ack(acks, cur_sn):
+    min_cnt = FLAGS.mws + 1
+    ret = 0
+    for i, ack in enumerate(acks):
+        cur_cnt = count_segments(cur_sn, ack) % (2**FLAGS.msb)
+        if cur_cnt < min_cnt:
+            min_cnt = cur_cnt
+            ret = acks[i]
+    return ret
 
 
 def main():
@@ -88,10 +100,12 @@ def main():
             length = len(segments)
             n = 0  # number of segments sent
             SF = 0  # first outstanding segment
-            CUR_SN = FLAGS.msw  # first segment of next to send window
-            PREV_SN = 0
+            CUR_SN = FLAGS.mws  # first segment of next to send window
+            FS = 0  # first segment of a window
             communicating = True
             sending = True
+            sliding = False
+            goback = False
 
             if command == 'INFO':
                 size_b = str(size).encode('utf-8')
@@ -112,36 +126,52 @@ def main():
                             remain -= data_size
                             print(f'Transferring to {client} with {seq.hex()}: {size - remain}/{size}')
                             i = i + 1
-                            if i == FLAGS.msw:  # 윈도우 사이즈만큼 송신
+                            if i == FLAGS.mws:  # 윈도우 사이즈만큼 송신
                                 i = 0
                                 sending = False
                         else:
                             sending = False
 
                         sock.settimeout(FLAGS.timeout)  # 데이터 송신 후 start timer
+                        acks = []
                         while not sending:  # check ack from client
                             try:
-                                chunk, client = sock.recvfrom(FLAGS.mtu)
-                                ack = struct.unpack('>B', chunk[:1])[0]
-                                print(f'ACK from client: {ack}')
-                                SF = ack  # SF 를 ack 으로 초기화
-                                if SF == CUR_SN:  # client 가 마지막 segment 를 수신하면 window sliding
-                                    sending = True
-                                    count = count_segments(PREV_SN, SF)
-                                    n = n + count
-                                    print(f'total segments {n}')
-                                    PREV_SN = CUR_SN
-                                    CUR_SN = (SF + FLAGS.msw) % (2 ** FLAGS.msb)  # SN 초기화
-                                    print(f'Window Sliding SN: {CUR_SN}')
+
+                                while True:
+                                    sock.settimeout(1)
+                                    try:
+                                        chunk, client = sock.recvfrom(FLAGS.mtu)
+                                        sock.settimeout(None)
+                                        ack = struct.unpack('>B', chunk[:1])[0]
+                                        print(f'ACK from client: {ack}')
+                                        acks.append(ack)
+                                        if len(acks) == FLAGS.mws:
+                                            break
+                                    except socket.timeout:
+                                        break
+
+                                SF = find_cumulative_ack(acks, CUR_SN)
+                                print(f'cumulative ack : {SF}')
+                                sending = True
+                                count = count_segments(SF, FS)
+                                print(f'prev sn :{FS}')
+                                n = n + count
+                                FS = SF
+                                CUR_SN = (SF + FLAGS.mws) % (2 ** FLAGS.msb)  # SN 초기화
+                                print(f'total segments {n}')
+                                print(f'Window Sliding SN: {CUR_SN}')
 
                             except socket.timeout:  # client 가 받지 못한 segment 로 go back
+                                SF = find_cumulative_ack(acks, CUR_SN)
+                                print(f'cumulative ack : {SF}')
                                 sending = True
-                                count = count_segments(PREV_SN, SF)
+                                count = count_segments(SF, FS)
+                                print(f'prev sn :{FS}')
                                 n = n + count
                                 print(f'total segments {n}')
                                 print(f'Go Back {n}')
-                                PREV_SN = CUR_SN
-                                CUR_SN = (SF + FLAGS.msw) % (2 ** FLAGS.msb)  # SN 초기화
+                                FS = SF
+                                CUR_SN = (SF + FLAGS.mws) % (2 ** FLAGS.msb)  # SN 초기화
                         sock.settimeout(None)
 
                         if n == length:  # 모든 세그먼트를 보냈다면 통신 종료
@@ -173,7 +203,7 @@ if __name__ == '__main__':
                         help='The file directory path')
     parser.add_argument('--msb', type=str, default=4,
                         help='The maximum sequence bit')
-    parser.add_argument('--msw', type=str, default=2 ** 4 - 1,
+    parser.add_argument('--mws', type=str, default=2 ** 4 - 1,
                         help='The maximum sliding window size')
 
     FLAGS, _ = parser.parse_known_args()
