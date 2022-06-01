@@ -99,13 +99,10 @@ def main():
             remain = size
             length = len(segments)
             n = 0  # number of segments sent
-            SF = 0  # first outstanding segment
             CUR_SN = FLAGS.mws  # first segment of next to send window
             FS = 0  # first segment of a window
             communicating = True
             sending = True
-            sliding = False
-            goback = False
 
             if command == 'INFO':
                 size_b = str(size).encode('utf-8')
@@ -132,13 +129,11 @@ def main():
                         else:
                             sending = False
 
-                        sock.settimeout(FLAGS.timeout)  # 데이터 송신 후 start timer
                         acks = []
                         while not sending:  # check ack from client
                             try:
-
                                 while True:
-                                    sock.settimeout(1)
+                                    sock.settimeout(FLAGS.timeout)
                                     try:
                                         chunk, client = sock.recvfrom(FLAGS.mtu)
                                         sock.settimeout(None)
@@ -150,6 +145,7 @@ def main():
                                     except socket.timeout:
                                         break
 
+                                # case 1 : client 가 전체 window 성공적 수신
                                 SF = find_cumulative_ack(acks, CUR_SN)
                                 print(f'cumulative ack : {SF}')
                                 sending = True
@@ -161,6 +157,7 @@ def main():
                                 print(f'total segments {n}')
                                 print(f'Window Sliding SN: {CUR_SN}')
 
+                            # case 2 : ack 손실
                             except socket.timeout:  # client 가 받지 못한 segment 로 go back
                                 SF = find_cumulative_ack(acks, CUR_SN)
                                 print(f'cumulative ack : {SF}')
@@ -172,7 +169,6 @@ def main():
                                 print(f'Go Back {n}')
                                 FS = SF
                                 CUR_SN = (SF + FLAGS.mws) % (2 ** FLAGS.msb)  # SN 초기화
-                        sock.settimeout(None)
 
                         if n == length:  # 모든 세그먼트를 보냈다면 통신 종료
                             sending = False
