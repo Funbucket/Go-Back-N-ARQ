@@ -100,23 +100,22 @@ def main():
                 while communicating:
                     i = 0
                     while sending:
-                        if n+i == length:
-                            communicating = False
-                            break
+                        if n + i < length:
+                            segment = segments[n + i]
 
-                        segment = segments[n+i]
+                            data = segment[1:]
+                            seq = segment[:1]
+                            chunk = seq + data
+                            sock.sendto(chunk, client)
 
-                        data = segment[1:]
-                        seq = segment[:1]
-                        chunk = seq + data
-                        sock.sendto(chunk, client)
-
-                        data_size = len(data)
-                        remain -= data_size
-                        print(f'Transferring to {client} with {seq.hex()}: {size-remain}/{size}')
-                        i = i + 1
-                        if i == FLAGS.msw:  # 윈도우 사이즈만큼 송신
-                            i = 0
+                            data_size = len(data)
+                            remain -= data_size
+                            print(f'Transferring to {client} with {seq.hex()}: {size - remain}/{size}')
+                            i = i + 1
+                            if i == FLAGS.msw:  # 윈도우 사이즈만큼 송신
+                                i = 0
+                                sending = False
+                        else:
                             sending = False
 
                         sock.settimeout(FLAGS.timeout)  # 데이터 송신 후 start timer
@@ -130,6 +129,7 @@ def main():
                                     sending = True
                                     count = count_segments(PREV_SN, SF)
                                     n = n + count
+                                    print(f'total segments {n}')
                                     PREV_SN = CUR_SN
                                     CUR_SN = (SF + FLAGS.msw) % (2 ** FLAGS.msb)  # SN 초기화
                                     print(f'Window Sliding SN: {CUR_SN}')
@@ -138,6 +138,7 @@ def main():
                                 sending = True
                                 count = count_segments(PREV_SN, SF)
                                 n = n + count
+                                print(f'total segments {n}')
                                 print(f'Go Back {n}')
                                 PREV_SN = CUR_SN
                                 CUR_SN = (SF + FLAGS.msw) % (2 ** FLAGS.msb)  # SN 초기화
